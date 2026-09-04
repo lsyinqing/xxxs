@@ -171,11 +171,11 @@ export default function App() {
   };
 
   // The core execution engine
-  const runSingleGeneration = async (task: SingleTask) => {
+  const runSingleGeneration = async (task: SingleTask, attempt = 1, currentLogs: string[] = []) => {
     updateTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'step1_running' } : t));
 
     try {
-      const response = await fetch('/api/generate', {
+      const startResponse = await fetch('/api/generate/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -183,13 +183,35 @@ export default function App() {
           extraPrompt: modeSnapshot.extraPrompt,
           kbPrompt: modeSnapshot.kbPrompt,
           input: task.originalText,
-          candidateCount: modeSnapshot.candidateCount,
-          autoFlowMode: modeSnapshot.autoFlowMode
+          candidateCount: modeSnapshot.candidateCount
         })
       });
 
-      if (!response.ok) { const errData = await response.json().catch(()=>({error: response.statusText})); throw new Error(`API Error: ${response.status} ${errData.error || ""}`); }
-      const data = await response.json();
+      if (!startResponse.ok) {
+        const errData = await startResponse.json().catch(()=>({error: startResponse.statusText}));
+        throw new Error(`API Error: ${startResponse.status} ${errData.error || ""}`);
+      }
+      
+      const { jobId } = await startResponse.json();
+      
+      let data: any = null;
+      while (true) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        const statusResponse = await fetch(`/api/generate/status/${jobId}`);
+        if (!statusResponse.ok) {
+          throw new Error(`Status API Error: ${statusResponse.status}`);
+        }
+        
+        const statusData = await statusResponse.json();
+        
+        if (statusData.status === 'completed') {
+          data = statusData;
+          break;
+        } else if (statusData.status === 'error') {
+          throw new Error(statusData.error);
+        }
+      }
       
       const subResults: SubResult[] = data.results.map((text: string, idx: number) => ({
         id: generateId(),
@@ -199,6 +221,23 @@ export default function App() {
 
       // Fallback filename extraction
       const filename = extractFilename(subResults[0]?.text || '');
+      const charCount = subResults[0]?.text.replace(/[\r\n]/g, '').length || 0;
+      
+      let isCompleted = modeSnapshot.autoFlowMode === 'auto';
+      let needsRetry = false;
+      const newLogs = [...currentLogs];
+
+      if (modeSnapshot.autoFlowMode === 'auto') {
+        if (charCount < 6000 && attempt < 3) {
+           needsRetry = true;
+           isCompleted = false;
+           newLogs.push(`[第 ${attempt} 次尝试] 返回字数：${charCount}。低于6000字，准备重试...`);
+        } else if (charCount < 6000 && attempt >= 3) {
+           newLogs.push(`[第 ${attempt} 次尝试] 返回字数：${charCount}。已达重试上限，保留当前结果。`);
+        } else {
+           newLogs.push(`[第 ${attempt} 次尝试] 返回字数：${charCount}。字数达标，任务完成。`);
+        }
+      }
 
       updateTasks(prev => prev.map(t => {
         if (t.id === task.id) {
@@ -206,13 +245,20 @@ export default function App() {
             ...t,
             filename: t.filename.startsWith('task_') ? filename : t.filename,
             subResults,
-            status: (modeSnapshot.autoFlowMode === 'auto' ? 'completed' : 'step1_completed') as TaskStatus
+            retryLogs: newLogs,
+            retryCount: attempt,
+            status: (isCompleted ? 'completed' : 'step1_completed') as TaskStatus
           };
-          // IndexedDB 实时落库 (防丢失) is handled inside updateTasks
           return updatedTask;
         }
         return t;
       }));
+
+      if (needsRetry) {
+        setTimeout(() => {
+          runSingleGeneration(task, attempt + 1, newLogs);
+        }, 1500);
+      }
 
     } catch (error) {
       console.error("Failed to generate for task", task.id, error);
@@ -536,7 +582,21 @@ export default function App() {
                           )}
 
                           {/* Completed View */}
-                          {task.status === 'completed' && task.subResults.length > 0 && (
+                          
+                          {/* Logs View */}
+                          {task.retryLogs && task.retryLogs.length > 0 && (
+                            <div className="mb-2 space-y-1">
+                              {task.retryLogs.map((log, i) => (
+                                <div key={i} className="text-[10px] text-slate-500 bg-slate-50 p-1.5 rounded border border-slate-100 flex items-center">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 mr-1.5"></span>
+                                  {log}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          
+                          {/* Generated Text View (always show if we have results, so we can see intermediate steps) */}
+                          {task.subResults.length > 0 && (
                             <div className="h-full bg-white/60 rounded-lg p-3">
                               <div className="text-xs text-slate-700 line-clamp-4 leading-relaxed">
                                 {task.subResults.find(r => r.isSelected)?.text || '未找到选中的结果'}

@@ -1,3 +1,5 @@
+#!/bin/bash
+cat << 'INNER_EOF' > server_poll.ts
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
@@ -25,14 +27,14 @@ async function startServer() {
       (async () => {
         try {
           let finalPrompt = '';
-          if (systemPrompt) finalPrompt += `${systemPrompt}\n\n`;
-          if (extraPrompt) finalPrompt += `【必须绝对服从的强制指令】：\n${extraPrompt}\n\n`;
-          if (kbPrompt) finalPrompt += `【参考附加知识库】：\n${kbPrompt}\n\n`;
+          if (systemPrompt) finalPrompt += \`\${systemPrompt}\n\n\`;
+          if (extraPrompt) finalPrompt += \`【必须绝对服从的强制指令】：\n\${extraPrompt}\n\n\`;
+          if (kbPrompt) finalPrompt += \`【参考附加知识库】：\n\${kbPrompt}\n\n\`;
           
           if (finalPrompt.includes('{input}')) {
             finalPrompt = finalPrompt.replace(/\{input\}/g, input);
           } else {
-            finalPrompt += `【待处理素材/输入内容】：\n${input}`;
+            finalPrompt += \`【待处理素材/输入内容】：\n\${input}\`;
           }
 
           const OPENAI_API_KEY = "sk-TSlcnHln2IlPF65jFqcvKQWtcMCMAfgcgfuJV1cytVKXFtAY";
@@ -46,7 +48,7 @@ async function startServer() {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${OPENAI_API_KEY}`
+                'Authorization': \`Bearer \${OPENAI_API_KEY}\`
               },
               body: JSON.stringify({
                 model: MODEL,
@@ -63,7 +65,7 @@ async function startServer() {
 
             if (!response.ok) {
               const errorText = await response.text();
-              throw new Error(`API Error (\${response.status}): \${errorText}`);
+              throw new Error(\`API Error (\${response.status}): \${errorText}\`);
             }
 
             const data = await response.json();
@@ -113,8 +115,63 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:\${PORT}`);
+    console.log(\`Server running on http://localhost:\${PORT}\`);
   });
 }
 
 startServer();
+INNER_EOF
+
+mv server_poll.ts server.ts
+
+cat << 'INNER_EOF' > app_poll.ts
+import fs from 'fs';
+
+let content = fs.readFileSync('src/App.tsx', 'utf8');
+
+const regex = /const response = await fetch\('\/api\/generate', \{[\s\S]*?if \(data\.error\) \{\n        throw new Error\(data\.error\);\n      \}/m;
+
+const replacement = `const startResponse = await fetch('/api/generate/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemPrompt: modeSnapshot.systemPrompt,
+          extraPrompt: modeSnapshot.extraPrompt,
+          kbPrompt: modeSnapshot.kbPrompt,
+          input: task.originalText,
+          candidateCount: modeSnapshot.candidateCount
+        })
+      });
+
+      if (!startResponse.ok) {
+        const errData = await startResponse.json().catch(()=>({error: startResponse.statusText}));
+        throw new Error(\`API Error: \${startResponse.status} \${errData.error || ""}\`);
+      }
+      
+      const { jobId } = await startResponse.json();
+      
+      let data: any = null;
+      while (true) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        const statusResponse = await fetch(\`/api/generate/status/\${jobId}\`);
+        if (!statusResponse.ok) {
+          throw new Error(\`Status API Error: \${statusResponse.status}\`);
+        }
+        
+        const statusData = await statusResponse.json();
+        
+        if (statusData.status === 'completed') {
+          data = statusData;
+          break;
+        } else if (statusData.status === 'error') {
+          throw new Error(statusData.error);
+        }
+      }`;
+
+content = content.replace(regex, replacement);
+fs.writeFileSync('src/App.tsx', content);
+
+INNER_EOF
+
+npx tsx app_poll.ts

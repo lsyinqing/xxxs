@@ -14,4 +14,6 @@ export interface SingleTask {
   subResults: SubResult[];
   createdAt: number;
   isDownloaded?: boolean;
+  retryLogs?: string[];
+  retryCount?: number;
 }

@@ -188,7 +188,7 @@ export default function App() {
         })
       });
 
-      if (!response.ok) throw new Error('API Error');
+      if (!response.ok) { const errData = await response.json().catch(()=>({error: response.statusText})); throw new Error(`API Error: ${response.status} ${errData.error || ""}`); }
       const data = await response.json();
       
       const subResults: SubResult[] = data.results.map((text: string, idx: number) => ({

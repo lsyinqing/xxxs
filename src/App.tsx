@@ -213,29 +213,32 @@ export default function App() {
         }
       }
       
+      const textLengths = data.results.map((text: string) => text.replace(/[\r\n]/g, '').length || 0);
+      const maxIdx = textLengths.indexOf(Math.max(0, ...textLengths));
+      
       const subResults: SubResult[] = data.results.map((text: string, idx: number) => ({
         id: generateId(),
         text,
-        isSelected: idx === 0 // Default select first
+        isSelected: idx === maxIdx // 自动选中字数最多（达标）的那一个方案
       }));
 
       // Fallback filename extraction
       const filename = extractFilename(subResults[0]?.text || '');
-      const charCount = subResults[0]?.text.replace(/[\r\n]/g, '').length || 0;
+      const maxCharCount = Math.max(0, ...subResults.map(sr => sr.text.replace(/[\r\n]/g, '').length || 0));
       
       let isCompleted = modeSnapshot.autoFlowMode === 'auto';
       let needsRetry = false;
       const newLogs = [...currentLogs];
 
       if (modeSnapshot.autoFlowMode === 'auto') {
-        if (charCount < 6000 && attempt < 3) {
+        if (maxCharCount < 5500 && attempt < 3) { 
            needsRetry = true;
            isCompleted = false;
-           newLogs.push(`[第 ${attempt} 次尝试] 返回字数：${charCount}。低于6000字，准备重试...`);
-        } else if (charCount < 6000 && attempt >= 3) {
-           newLogs.push(`[第 ${attempt} 次尝试] 返回字数：${charCount}。已达重试上限，保留当前结果。`);
-        } else {
-           newLogs.push(`[第 ${attempt} 次尝试] 返回字数：${charCount}。字数达标，任务完成。`);
+           newLogs.push(`[第 ${attempt} 次尝试] 最佳字数：${maxCharCount}。低于5500字，准备重试...`);
+        } else if (maxCharCount < 5500 && attempt >= 3) { 
+           newLogs.push(`[第 ${attempt} 次尝试] 最佳字数：${maxCharCount}。已达重试上限，保留当前结果。`);
+        } else { 
+           newLogs.push(`[第 ${attempt} 次尝试] 最佳字数：${maxCharCount}。字数达标，任务完成。`);
         }
       }
 
@@ -270,19 +273,21 @@ export default function App() {
   useEffect(() => {
     if (!isSingleRunning) return;
 
-    const processNext = async () => {
-      const pendingTask = singleTasks.find(t => t.status === 'pending');
-      if (pendingTask) {
-        await runSingleGeneration(pendingTask);
-      } else {
-        // If no pending tasks, and no running tasks, we can stop
-        if (!singleTasks.some(t => t.status === 'step1_running')) {
-          setIsSingleRunning(false);
-        }
-      }
-    };
+    const runningCount = singleTasks.filter(t => t.status === 'step1_running').length;
+    const CONCURRENCY_LIMIT = 3;
 
-    processNext();
+    if (runningCount < CONCURRENCY_LIMIT) {
+      const availableSlots = CONCURRENCY_LIMIT - runningCount;
+      const pendingTasks = singleTasks.filter(t => t.status === 'pending').slice(0, availableSlots);
+      
+      if (pendingTasks.length > 0) {
+        pendingTasks.forEach(task => {
+          runSingleGeneration(task);
+        });
+      } else if (runningCount === 0) {
+        setIsSingleRunning(false);
+      }
+    }
   }, [isSingleRunning, singleTasks, modeSnapshot]);
 
   const handleStartWorkflow = () => {
@@ -344,36 +349,39 @@ export default function App() {
     updateTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'completed' } : t));
   };
 
-  const handleExportAll = () => {
+  const handleExportAll = async () => {
     const completedTasks = singleTasks.filter(t => t.status === 'completed');
     if (completedTasks.length === 0) {
-      alert("没有已完成的任务可以合并导出！");
+      alert("没有已完成的任务可以导出！");
       return;
     }
 
-    let combinedContent = "";
-    
+    const zip = new JSZip();
+
     completedTasks.forEach((task, index) => {
       const selected = task.subResults.find(sr => sr.isSelected);
       if (!selected) return;
 
-      const finalGenerated = cleanGeneratedText(selected.text);
-      // 二次清理完之后再进行合并，和新章节命名 ###1 ###2
-      combinedContent += `###${index + 1}\n${finalGenerated}\n\n`;
+      const finalOriginal = `### 1\n${cleanOriginalText(task.originalText)}`;
+      const finalGenerated = `### 2\n${cleanGeneratedText(selected.text)}`;
+      const combinedContent = `${finalOriginal}\n\n${finalGenerated}`;
+      
+      const safeFilename = task.filename.replace(/[/\\?%*:|"<>]/g, '-');
+      zip.file(`${safeFilename}.txt`, combinedContent);
     });
 
-    const blob = new Blob([combinedContent], { type: 'text/plain;charset=utf-8' });
+    const blob = await zip.generateAsync({ type: 'blob' });
     const url = URL.createObjectURL(blob);
     
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Batch_Merged_Chapters_${Date.now()}.txt`;
+    a.download = `Batch_Export_${Date.now()}.zip`;
     a.click();
     
     setTimeout(() => {
       URL.revokeObjectURL(url);
     }, 60000);
-    
+
     updateTasks(prev => prev.map(t => 
       t.status === 'completed' ? { ...t, isDownloaded: true } : t
     ));

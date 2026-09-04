@@ -1,0 +1,6 @@
+{
+  "name": "Single Node Engine",
+  "description": "一步到位的高效文本处理引擎，支持并发生成与安全破限。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

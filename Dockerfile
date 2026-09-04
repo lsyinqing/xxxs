@@ -16,4 +16,5 @@ RUN npm run build
 EXPOSE 3000
 
 # Start the built server
+ENV NODE_ENV=production
 CMD ["node", "dist/server.cjs"]

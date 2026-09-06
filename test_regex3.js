@@ -5,6 +5,11 @@ let text = `【**【指令执行确认】**
 
 正文开始...`;
 
-let match = text.match(/^【[\s\S]*?(?:指令(?:执行)?确认|已?收到指令|已?接收指令)[\s\S]*?】\s*\n+/);
-console.log(match ? match[0] : "NO MATCH");
+let cleaned = text.replace(/^【[\s\S]{0,100}?(?:指令(?:执行)?确认|已?收到指令|已?接收指令)[\s\S]{0,2000}?(?:\n\s*\n|\n(?=[^\n]*正文))/g, function(match) {
+    return ""; // Actually, this is getting complicated.
+});
 
+// A simpler way: Find the index of the first `】` that comes after the keywords, but since there could be `**`, maybe we just find `】` that is at the end of a line or followed by `\n`.
+let cleaned2 = text.replace(/^【[\s\S]{0,200}?(?:指令(?:执行)?确认|已?收到指令|已?接收指令|创作模式|执行知乎风)[\s\S]{0,2000}?】\s*/, '');
+
+console.log("CLEANED2:", JSON.stringify(cleaned2));
